@@ -1,0 +1,70 @@
+ #Production Layer SQL Codes & Schema Testing 
+   
+{{ config(materialized='table') }}
+
+select 
+    un_locode,
+    port_name,
+    country_code,
+    latitude,
+    longitude,
+    zone_code
+from {{ ref('stg_ports') }}
+   
+---------------------------------------------------
+
+The Fact Table: models/marts/fct_port_congestion.sql
+{{ config(materialized='table') }}
+
+with activity as (
+    select * from {{ ref('stg_activity') }}
+),
+ports as (
+    select * from {{ ref('stg_ports') }}
+)
+
+select
+    md5(concat(a.un_locode, '_', a.report_date)) as congestion_key,
+    a.un_locode,
+    p.port_name,
+    p.country_code,
+    p.zone_code,
+    a.report_date,
+    a.vessel_calls,
+    a.cargo_volume,
+    a.dwell_days,
+    -- Calculate net operational delays
+    (a.dwell_days - a.planned_days) as delay_days,
+    -- Quantify financial impact for business stakeholders
+    case 
+        when (a.dwell_days - a.planned_days) > 0 
+        then (a.dwell_days - a.planned_days) * 20000
+        else 0
+    end as estimated_delay_cost_usd
+from activity a
+join ports p on a.un_locode = p.un_locode
+   
+---------------------------------------------------
+
+Data Quality & Testing Schema: models/marts/marts.yml
+
+version: 2
+
+models:
+  - name: dim_ports
+    description: "Standardized dimensional registry of global seaports containing geolocation metrics."
+    columns:
+      - name: un_locode
+        description: "Primary key for port identification (UN/LOCODE format)."
+        tests:
+          - unique
+          - not_null
+
+  - name: fct_port_congestion
+    description: "Daily fact table evaluating vessel traffic, terminal throughput, and financial delay penalties."
+    columns:
+      - name: congestion_key
+        description: "Surrogate primary key generated via MD5 hash."
+        tests:
+          - unique
+          - not_null
